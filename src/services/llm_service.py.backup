@@ -1,0 +1,674 @@
+"""
+LLM Service for Lead Follow-up AI Agent
+Handles OpenAI API calls and mock responses for lead analysis
+"""
+
+import json
+import logging
+import os
+from typing import Dict, Any
+from openai import OpenAI
+
+logger = logging.getLogger(__name__)
+
+def safe_strip(value):
+    """Safely strip whitespace from a value, returning empty string if not a string."""
+    return value.strip() if isinstance(value, str) else ""
+
+async def analyze_lead(lead_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Analyze lead data and return decision dictionary
+    
+    Args:
+        lead_data: Dictionary containing lead information
+        
+    Returns:
+        Dictionary with LeadDecision fields
+    """
+    mock_mode = os.getenv("MOCK_LLM", "false").lower() in ("1", "true", "yes")
+   
+    
+    if mock_mode:
+        return _mock_response(lead_data)
+    
+    try:
+        return await _openai_response(lead_data)
+    except Exception as e:
+        logger.error(f"OpenAI API call failed: {e}")
+        return _fallback_response(lead_data)
+
+async def plan_next_action(lead_data: Dict[str, Any], state_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Plan the next action for a sales rep based on lead and state
+    
+    Args:
+        lead_data: Dictionary containing lead information
+        state_data: Dictionary containing lead state information
+        metadata_data: Dictionary containing metadata including thread_key
+        
+    Returns:
+        Dictionary with ActionPlan fields
+    """
+    mock_mode = os.getenv("MOCK_LLM", "false").lower() in ("1", "true", "yes")
+    
+    if mock_mode:
+        return _mock_action_plan(lead_data, state_data)
+    
+    try:
+        return await _openai_action_plan(lead_data, state_data)
+    except Exception as e:
+        logger.error(f"OpenAI API call failed: {e}")
+        return _fallback_action_plan(lead_data, state_data)
+
+def _mock_response(lead_data: Dict[str, Any]) -> Dict[str, Any]:
+
+    """
+    Mock decision that respects upstream signals from n8n:
+      - uses incoming priority if present
+      - boosts if interests/notes exist
+      - honors upstream to_agent when provided (even as "true"/"false" strings)
+      - picks channel from explicit source/email/phone
+    """
+
+    # --- Normalize inputs ---
+    email = (lead_data.get("email") or "").strip()
+    phone = (lead_data.get("phone") or "").strip()
+    has_contact = bool(email or phone)
+
+    # source -> channel
+    source_raw = (lead_data.get("source") or "").strip().lower()
+
+    # interests can be `interests` (list/string) or `interest` (string)
+    interests = lead_data.get("interests")
+    if interests is None:
+        interests = lead_data.get("interest")
+    if isinstance(interests, str):
+        interests = [interests]
+    if not isinstance(interests, list):
+        interests = []
+    interests_norm = [str(x).strip() for x in interests if str(x).strip()]
+
+    notes = (lead_data.get("notes") or "").strip()
+
+    # take upstream priority if numeric; else start from 5
+    try:
+        priority = int(lead_data.get("priority")) if lead_data.get("priority") is not None else 5
+    except Exception:
+        priority = 5
+
+    # upstream to_agent (bool or string)
+    incoming_to_agent = None
+    if "to_agent" in lead_data:
+        v = lead_data.get("to_agent")
+        if isinstance(v, str):
+            incoming_to_agent = v.strip().lower() in ("true", "1", "yes")
+        else:
+            incoming_to_agent = bool(v)
+
+    # --- Channel selection ---
+    explicit_channel = None
+    if source_raw in {"whatsapp", "wa", "wa chat", "whats app"}:
+        explicit_channel = "WhatsApp"
+    elif source_raw in {"instagram", "ig", "instagram dm"}:
+        explicit_channel = "Instagram DM"
+    elif source_raw in {"email", "e-mail", "mail"}:
+        explicit_channel = "Email"
+    elif source_raw in {"phone", "call", "phone call"}:
+        explicit_channel = "Phone"
+
+    if explicit_channel:
+        channel = explicit_channel
+    elif email:
+        channel = "Email"
+    elif phone:
+        channel = "Phone"
+    else:
+        channel = "WhatsApp"
+
+    # --- Heuristics to adjust priority ---
+    # interest or notes = intent signal
+    has_interest_signal = bool(interests_norm) or bool(notes)
+
+    # boost on relevant interest keywords
+    interest_text = (", ".join(interests_norm)).lower()
+    if any(k in interest_text for k in ["interior", "design", "nursery", "cot", "crib", "bed", "decor", "furniture"]):
+        priority = max(priority, 6)  # ensure at least warm
+    elif interests_norm:
+        priority = max(priority, 5)
+
+    # any notes -> small boost if low
+    if notes and priority < 6:
+        priority = 6
+
+    # clamp 0–10
+    priority = max(0, min(10, priority))
+
+    # threshold: allow env override
+    try:
+        threshold = int(os.getenv("AGENT_HANDOFF_THRESHOLD", "6"))
+    except Exception:
+        threshold = 6
+
+    # final decision:
+    # - if upstream explicitly said True -> use it (guard: must be contactable)
+    # - else True if (priority >= threshold) OR (has_interest_signal and contactable)
+    if incoming_to_agent is True and has_contact:
+        to_agent = True
+    elif incoming_to_agent is False:
+        to_agent = False
+    else:
+        to_agent = (priority >= threshold) or (has_interest_signal and has_contact)
+
+    return {
+        "zoho_id": lead_data.get("zoho_id", "MOCK_ID"),
+        "channel": channel,
+        "priority": priority,
+        "to_agent": bool(to_agent),
+        "notes": "Mock analysis: upstream-aware (priority/interest/notes).",
+        "message": None,
+        "intent": "general",
+        "score": priority * 10,
+    }
+import re
+
+KEYWORD_BANK = [
+    "cot bed", "cot", "crib", "cribs", "changing unit", "changing table",
+    "wardrobe", "bedding", "mattress", "dresser", "rocking chair",
+    "nursing chair", "moses basket", "bassinet", "wallpaper",
+    "interior design", "design",
+]
+
+def is_specific_topic(text: str) -> bool:
+    """True if text contains any product/design keywords."""
+    if not text:
+        return False
+    t = text.lower()
+    return any(kw in t for kw in KEYWORD_BANK)
+
+def extract_topic(lead_data: dict, state_data: dict) -> str:
+    """
+    Pick a concise 'what' topic from (1) interests, (2) email subject/body,
+    (3) recent customer message in history. Fallback to 'your enquiry'.
+    """
+    # 1) interests
+    interests = lead_data.get("interests") or []
+    if isinstance(interests, str):
+        interests = [s.strip() for s in interests.split(",") if s.strip()]
+    interests = [str(x) for x in interests if str(x).strip()]
+    if interests:
+        return str(interests[0])
+
+    # 2) subject/body
+    subject = (lead_data.get("subject") or "").strip()
+    notes   = (lead_data.get("notes") or "").strip()
+    combo   = f"{subject} {notes}".strip()
+    if is_specific_topic(combo):
+        for kw in KEYWORD_BANK:
+            if kw in combo.lower():
+                return kw
+
+    # 3) last customer msg in history
+    history = (state_data or {}).get("history") or []
+    for msg in reversed(history):
+        if (msg.get("role") or "").lower() == "customer":
+            txt = (msg.get("text") or "")
+            if is_specific_topic(txt):
+                for kw in KEYWORD_BANK:
+                    if kw in txt.lower():
+                        return kw
+            break
+
+    # fallback
+    return (lead_data.get("interest") or "your enquiry")
+
+def get_in_person_followup(lead_data: Dict[str, Any], state_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate followup message for in-person leads based on preferred channel.
+    
+    Args:
+        lead_data: Dictionary containing lead information
+        state_data: Dictionary containing lead state information
+        
+    Returns:
+        Dictionary with channel and message details for in-person followup
+    """
+    import os
+    from uuid import uuid4
+    
+    # Get lead details
+    name = (lead_data.get("name") or "there").strip()
+    first = (name.split()[0] if name else "there") or "there"
+    preferred = (state_data.get("preferred_channel") or "").strip().lower()
+    
+    # Get signoffs
+    SIGNOFF_NAME = os.getenv("SIGNOFF_NAME", "Sabrina")
+    EMAIL_SIGNOFF = os.getenv("SIGNOFF_EMAIL", f"{SIGNOFF_NAME}\nThe Baby Cot Shop")
+    WA_SIGNOFF = os.getenv("SIGNOFF_WA", f"{SIGNOFF_NAME}\nThe Baby Cot Shop")
+    
+    # Determine channel and message based on preferred channel
+    if preferred in {"whatsapp", "wa"}:
+        return {
+            "channel": "whatsapp",
+            "message": f"Hi {first}, it was lovely seeing you at Harrods! I just wanted to follow up, happy to help if you're still considering anything for your little one's room\n\nFeel free to message anytime\n{WA_SIGNOFF}"
+        }
+    else:  # email or missing
+        return {
+            "channel": "email",
+            "subject": f"Lovely seeing you at Harrods, {first}",
+            "message": f"Hi {first}, It was such a pleasure connecting with you at Harrods.\n\nI just wanted to follow up to say thank you for visiting us, and if there's anything you're still considering for your little one's room, I'd be happy to help.\n\nWhether you're ready to explore options or just have a few questions, feel free to reply here.\n\nWarmest regards,\n\n{EMAIL_SIGNOFF}"
+        }
+def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], metadata_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Generate mock action plan (personalized via subject/history), preserving existing copy 1:1."""
+    import os, re
+    from uuid import uuid4
+
+   
+
+    # ---------- Normalize minimal fields ----------
+    preferred = (state_data.get("preferred_channel") or "").strip().lower()
+    email = (lead_data.get("email") or "").strip()
+    phone = safe_strip(lead_data.get("phone"))
+    country = safe_strip(lead_data.get("country"))
+    name = (lead_data.get("name") or "there").strip()
+    first = (name.split()[0] if name else "there") or "there"
+
+    # ---------- Channel choice ----------
+    if preferred in {"whatsapp", "wa"}:
+        channel = "WhatsApp"
+    elif preferred in {"email"}:
+        channel = "Email"
+    elif preferred in {"phone", "call"}:
+        channel = "Phone"
+    elif email:
+        channel = "Email"
+    elif phone:
+        channel = "Phone"
+    else:
+        channel = "WhatsApp"
+
+    # ---------- Priority ----------
+    priority = 7 if channel in ("WhatsApp", "Phone") else 5
+    if (state_data.get("last_outcome") or "").strip().lower() == "no_reply":
+        priority = min(10, priority + 1)
+
+    # ---------- Pull subject + last customer message ----------
+    subject_in = (lead_data.get("subject") or state_data.get("subject") or "").strip()
+    hist = state_data.get("history") or []
+    last_customer_text = ""
+    for m in reversed(hist):
+        try:
+            role = (m.get("role") or "").lower()
+            if role in ("customer", "user", ""):
+                t = (m.get("text") or "").strip()
+                if t:
+                    last_customer_text = t
+                    break
+        except Exception:
+            continue
+
+    # ---------- Normalise interests to list[str] ----------
+    interests = lead_data.get("interests")
+    if isinstance(interests, str):
+        interests = [s.strip() for s in interests.split(",") if s.strip()]
+    elif isinstance(interests, list):
+        interests = [str(x).strip() for x in interests if str(x).strip()]
+    else:
+        interests = []
+
+    notes_raw = (lead_data.get("notes") or "").strip()
+
+    # ---------- IN-PERSON LEADS LOGIC ----------
+    source = lead_data.get("source", "").strip().lower()
+    
+    # Check if this is an in-person lead
+    in_person_sources = {"harrods", "chelsea", "store visit", "in-store"}
+    is_in_person = source in in_person_sources
+    
+    if is_in_person:
+        # Generate in-person followup
+        followup = get_in_person_followup(lead_data, state_data)
+        
+        # Build the action plan for in-person leads
+        plan = {
+            "action": "send_message",
+            "channel": followup["channel"],
+            "message": {
+                "subject": followup.get("subject", "Quick follow-up"),
+                "body": followup["message"],
+                "whatsapp_text": followup["message"] if followup["channel"] == "whatsapp" else None,
+            },
+            "metadata": {
+                "priority": priority,
+                "to_agent": priority >= 8,
+                "ai_notes": f"In-person followup for {source} lead",
+                "suggested_followup_in_hours": 48,
+                "history_seen": len(hist),
+                "history_last": last_customer_text,
+                "thread_key": metadata_data.get("thread_key") if metadata_data else "",
+            },
+            "log": f"In-person followup for {source} lead",
+            "store": {
+                "decision_channel": followup["channel"],
+                "decision_priority": priority,
+                "ai_notes": f"In-person followup for {source} lead",
+                "zoho_id": lead_data.get("zoho_id"),
+                "name": name,
+                "email": email,
+                "thread_key": (metadata_data.get("thread_key") if metadata_data else ""),
+                "subject": subject_in,
+            },
+        }
+        return plan
+
+    # ---------- HARRODS GUARDRAIL ----------
+    if source == "harrods":
+        has_interests = bool(interests)
+        has_notes = bool(notes_raw)
+        if not has_interests and not has_notes:
+            logger.info(f"Harrods guardrail check: interests={interests}, notes='{notes_raw}'")
+            logger.info("Harrods lead blocked: no interests or notes found")
+            return {
+                "plan_id": str(uuid4()),
+                "action": "wait_for_update",
+                "channel": None,
+                "message": None,
+                "metadata": {
+                    "priority": priority,
+                    "to_agent": False,
+                    "ai_notes": "Harrods lead with no interests or notes. Suppressing follow-up. Await CRM enrichment.",
+                    "suggested_followup_in_hours": 0,
+                    "thread_key": metadata_data.get("thread_key") if metadata_data else "",
+                },
+                "log": "Guardrail: Harrods lead blocked until context is enriched.",
+                "store": {
+                    "zoho_id": lead_data.get("zoho_id", ""),
+                    "name": lead_data.get("name", ""),
+                    "email": email,
+                    "decision_channel": None,
+                    "decision_priority": priority,
+                    "ai_notes": "Harrods lead with no interests or notes. Awaiting CRM update."
+                }
+            }
+
+    # ---------- Find "what" to personalise ----------
+    def is_specific_topic(w: str) -> bool:
+        if not w:
+            return False
+        wl = w.lower()
+        # treat generic placeholders as NOT specific
+        if wl in {"your enquiry", "enquiry", "question"}:
+            return False
+        return True
+
+    # 1) explicit interests first
+    what = interests[0] if interests else None
+
+    # 2) mine subject + last message + notes if still empty
+    if not what:
+        hay_low = " ".join([
+            subject_in.lower(),
+            last_customer_text.lower(),
+            notes_raw.lower(),
+            (lead_data.get("interest") or "").lower()
+        ])
+        phrase_bank = [
+            "cot bed", "changing table", "changing unit", "moses basket",
+            "nursing chair", "rocking chair", "custom fabric", "custom fabrics",
+        ]
+        single_bank = [
+            "cot", "crib", "cribs", "wardrobe", "bedding", "mattress",
+            "dresser", "bassinet", "wallpaper",
+            # collection/brand hints
+            "balmoral", "windsor", "kensington", "savoy", "chelsea",
+            "collection", "bespoke",
+            "design", "interior",
+        ]
+        hit = next((p for p in phrase_bank if p in hay_low), None)
+        if hit:
+            what = hit
+        else:
+            hit = next((w for w in single_bank if w in hay_low), None)
+            if hit:
+                what = hit
+
+    # 3) capitalised token as a last-ditch guess (often a collection name)
+    if not what and last_customer_text:
+        m = re.search(r"\b([A-Z][a-zA-Z]{3,})\b", last_customer_text)
+        if m:
+            what = m.group(1)
+
+    # 4) ultimate fallback
+    if not what:
+        what = (lead_data.get("interest") or "your enquiry")
+
+    # ---------- Configurable sign-offs ----------
+    SIGNOFF_NAME  = os.getenv("SIGNOFF_NAME", "Sabrina")
+    EMAIL_SIGNOFF = os.getenv("SIGNOFF_EMAIL", f"Kind regards,\n{SIGNOFF_NAME}\nThe Baby Cot Shop")
+    WA_SIGNOFF    = os.getenv("SIGNOFF_WA", SIGNOFF_NAME)
+
+    subject_out = "Quick follow-up"
+
+    # ---------- Decide message type (design vs product vs generic) ----------
+    wl = (what or "").lower()
+    is_design = ("design" in wl) or ("interior" in wl)
+
+    if is_design:
+        email_body = (
+            f"Hi {first}, I noticed you're interested in {what}. "
+            f"Would you like me to send a quick moodboard or a shortlist of pieces "
+            f"to help you choose? If you'd prefer, we can also jump on a short "
+            f"10–15 min call—completely up to you."
+            f"\n\n{EMAIL_SIGNOFF}"
+        )
+        wa_text = (
+            f"Hi {first}! Re your interest in {what}, want me to send a quick moodboard/"
+            f"inspo to get you started? Or we can do a short 10–15 min call if you'd rather "
+            f"talk it through. Which do you prefer?"
+            f"\n— {WA_SIGNOFF}"
+        )
+    elif is_specific_topic(what):
+        email_body = (
+            f"Hi {first}, thanks for your enquiry about {what}. "
+            f"Are you looking for options, pricing, or inspiration? "
+            f"Happy to share a few quick ideas."
+            f"\n\n{EMAIL_SIGNOFF}"
+        )
+        wa_text = (
+            f"Hi {first}! Thanks for asking about {what}, would you like me to send a few "
+            f"options or ideas to guide you?"
+            f"\n— {WA_SIGNOFF}"
+        )
+    else:
+        email_body = (
+            f"Hi {first}, thanks for visiting The Baby Cot Shop. "
+            f"Would you like me to share some inspiration ideas or clients' favourites "
+            f"to help you get started? Just let me know what would be most useful."
+            f"\n\n{EMAIL_SIGNOFF}"
+        )
+        wa_text = (
+            f"Hi {first}! Thanks for visiting The Baby Cot Shop, want me to share some of our "
+            f"clients' favourite pieces to get you started?"
+            f"\n— {WA_SIGNOFF}"
+        )
+
+    ai_notes = f"Mock plan: {channel} with priority {priority}; personalized on '{what or 'n/a'}'."
+
+    # ---------- Assemble plan ----------
+    plan = {
+        "action": "send_message",
+        "channel": channel,
+        "message": {
+            "subject": subject_out,
+            "body": email_body,
+            "whatsapp_text": wa_text,
+        },
+        "metadata": {
+            "priority": priority,
+            "to_agent": priority >= 8,
+            "ai_notes": ai_notes,
+            "suggested_followup_in_hours": 48,
+            # helpful for debugging that history arrived
+            "history_seen": len(hist),
+            "history_last": last_customer_text,
+            "thread_key": metadata_data.get("thread_key") if metadata_data else "",
+        },
+        "log": ai_notes,
+        "store": {
+            "decision_channel": channel,
+            "decision_priority": priority,
+            "ai_notes": ai_notes,
+            # surface fields you want downstream without digging
+            "zoho_id": lead_data.get("zoho_id"),
+            "name": name,
+            "email": email,
+            "thread_key": (metadata_data.get("thread_key") if metadata_data else ""),
+            "subject": subject_in,
+        },
+    }
+    return plan
+
+
+    
+async def _openai_response(lead_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Get response from OpenAI API"""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not set")
+    
+    client = OpenAI(api_key=api_key)
+    
+    prompt = f"""
+    Analyze this lead and return a JSON response with these exact fields:
+    - channel: Email, Phone, WhatsApp, Instagram DM, or LinkedIn
+    - priority: 0-10 score
+    - to_agent: true/false
+    - notes: brief reasoning
+    - message: optional draft message
+    - intent: general, interior_design, or other category
+    - score: 0-100 numerical score
+    
+    Lead data: {json.dumps(lead_data, indent=2)}
+    
+    Respond with valid JSON only.
+    """
+    
+    response = client.chat.completions.create(
+        model=os.getenv("LLM_MODEL", "gpt-4o"),
+        messages=[
+            {"role": "system", "content": "You are a sales lead analysis expert. Always respond with valid JSON."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.1,
+        max_tokens=500,
+        response_format={"type": "json_object"}
+    )
+    
+    content = response.choices[0].message.content
+    result = json.loads(content)
+    
+    return {
+        "zoho_id": lead_data.get("zoho_id", "UNKNOWN"),
+        "channel": result.get("channel", "Email"),
+        "priority": int(result.get("priority", 5)),
+        "to_agent": bool(result.get("to_agent", True)),
+        "notes": result.get("notes", ""),
+        "message": result.get("message"),
+        "intent": result.get("intent", "general"),
+        "score": int(result.get("score", 50))
+    }
+
+async def _openai_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], metadata_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Get action plan from OpenAI API"""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not set")
+    
+    client = OpenAI(api_key=api_key)
+    
+    prompt = f"""
+    As a sales rep agent, analyze this lead and state to determine the next action.
+    Return a JSON response with these exact fields:
+    
+    - action: "send_message", "schedule_followup", "handoff", or "stop"
+    - channel: "Email", "WhatsApp", "Phone", or "Instagram DM"
+    - message: {{ "subject": "...", "body": "...", "whatsapp_text": "..." }}
+    - metadata: {{ "priority": 0-10, "to_agent": true/false, "ai_notes": "...", "suggested_followup_in_hours": number }}
+    - log: brief reasoning for the action
+    - store: {{ "decision_channel": "...", "decision_priority": number, "ai_notes": "..." }}
+    
+    Lead data: {json.dumps(lead_data, indent=2)}
+    State data: {json.dumps(state_data, indent=2)}
+    
+    Respond with valid JSON only.
+    """
+    
+    response = client.chat.completions.create(
+        model=os.getenv("LLM_MODEL", "gpt-4o"),
+        messages=[
+            {"role": "system", "content": "You are a sales rep agent expert. Always respond with valid JSON."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.3,
+        max_tokens=800,
+        response_format={"type": "json_object"}
+    )
+    
+    content = response.choices[0].message.content
+    result = json.loads(content)
+    
+    # Ensure all required fields are present with defaults
+    store = result.get("store", {})
+    # Pass through thread_key from metadata_data
+    if metadata_data and metadata_data.get("thread_key"):
+        store["thread_key"] = metadata_data["thread_key"]
+    
+    return {
+        "action": result.get("action", "send_message"),
+        "channel": result.get("channel", "Email"),
+        "message": result.get("message", {}),
+        "metadata": result.get("metadata", {}),
+        "log": result.get("log", "AI-generated action plan"),
+        "store": store
+    }
+
+def _fallback_response(lead_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return safe fallback when API fails"""
+    return {
+        "zoho_id": lead_data.get("zoho_id", "UNKNOWN"),
+        "channel": "Email",
+        "priority": 5,
+        "to_agent": False,
+        "notes": "Analysis failed - manual review recommended",
+        "message": None,
+        "intent": "general",
+        "score": 50
+    }
+
+def _fallback_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], metadata_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Return safe fallback action plan when API fails"""
+    store = {
+        "decision_channel": "Email",
+        "decision_priority": 5,
+        "ai_notes": "API failed - manual review required"
+    }
+    # Pass through thread_key from metadata_data
+    if metadata_data and metadata_data.get("thread_key"):
+        store["thread_key"] = metadata_data["thread_key"]
+    
+    return {
+        "action": "send_message",
+        "channel": "Email",
+        "message": {
+            "subject": "Follow-up needed",
+            "body": "Please review this lead manually.",
+            "whatsapp_text": "Follow-up needed - please review manually."
+        },
+        "metadata": {
+            "priority": 5,
+            "to_agent": True,
+            "ai_notes": "API failed - manual review required",
+            "suggested_followup_in_hours": 24
+        },
+        "log": "API call failed - using fallback plan",
+        "store": store
+    }
