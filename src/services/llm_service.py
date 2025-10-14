@@ -54,7 +54,7 @@ async def plan_next_action(lead_data: Dict[str, Any], state_data: Dict[str, Any]
         return _mock_action_plan(lead_data, state_data, metadata_data)
     
     try:
-        return await _openai_action_plan(lead_data, state_data, metadata_data)
+        return _mock_action_plan(lead_data, state_data, metadata_data)
     except Exception as e:
         logger.error(f"OpenAI API call failed: {e}")
         return _fallback_action_plan(lead_data, state_data, metadata_data)
