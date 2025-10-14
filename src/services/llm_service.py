@@ -41,23 +41,52 @@ async def plan_next_action(lead_data: Dict[str, Any], state_data: Dict[str, Any]
     """
     Plan the next action for a sales rep based on lead and state
     
+    Uses hybrid approach:
+    - OpenAI for lead scoring, analysis, and AI notes (when MOCK_LLM=False)
+    - Deterministic mock logic for all messaging/reply generation (always)
+    - This ensures consistent messaging while allowing AI analysis
+    
     Args:
         lead_data: Dictionary containing lead information
         state_data: Dictionary containing lead state information
+        metadata_data: Dictionary containing metadata information
         
     Returns:
         Dictionary with ActionPlan fields
     """
     mock_mode = os.getenv("MOCK_LLM", "false").lower() in ("1", "true", "yes")
     
-    if mock_mode:
-        return _mock_action_plan(lead_data, state_data, metadata_data)
+    # Always use deterministic messaging logic for reply generation
+    # This ensures consistent outbound messages regardless of MOCK_LLM setting
+    messaging_plan = _mock_action_plan(lead_data, state_data, metadata_data)
     
-    try:
-        return _mock_action_plan(lead_data, state_data, metadata_data)
-    except Exception as e:
-        logger.error(f"OpenAI API call failed: {e}")
-        return _fallback_action_plan(lead_data, state_data, metadata_data)
+    # If MOCK_LLM=False, enhance with OpenAI analysis for scoring and AI notes
+    if not mock_mode:
+        try:
+            ai_analysis = await _openai_action_plan(lead_data, state_data, metadata_data)
+            
+            # Override messaging with deterministic logic, but keep AI analysis
+            messaging_plan.update({
+                "metadata": {
+                    **messaging_plan.get("metadata", {}),
+                    # Keep AI-generated analysis fields
+                    "ai_notes": ai_analysis.get("metadata", {}).get("ai_notes", messaging_plan.get("metadata", {}).get("ai_notes", "")),
+                    "priority": ai_analysis.get("metadata", {}).get("priority", messaging_plan.get("metadata", {}).get("priority", 5)),
+                    "to_agent": ai_analysis.get("metadata", {}).get("to_agent", messaging_plan.get("metadata", {}).get("to_agent", False)),
+                },
+                "store": {
+                    **messaging_plan.get("store", {}),
+                    # Keep AI-generated store fields
+                    "ai_notes": ai_analysis.get("store", {}).get("ai_notes", messaging_plan.get("store", {}).get("ai_notes", "")),
+                    "decision_priority": ai_analysis.get("store", {}).get("decision_priority", messaging_plan.get("store", {}).get("decision_priority", 5)),
+                }
+            })
+            
+        except Exception as e:
+            logger.error(f"OpenAI API call failed, using mock logic only: {e}")
+            # Continue with mock-only plan if OpenAI fails
+    
+    return messaging_plan
 
 def _mock_response(lead_data: Dict[str, Any]) -> Dict[str, Any]:
 
@@ -283,13 +312,116 @@ def get_in_person_followup(lead_data: Dict[str, Any], state_data: Dict[str, Any]
 def log_debug(msg):
     print("[DEBUG]", msg)
 
+def _generate_deterministic_message(what: str, first_name: str, channel: str) -> Dict[str, str]:
+    """
+    Generate deterministic message content based on topic and channel.
+    
+    This function creates all message content without any AI calls.
+    Used for consistent messaging across all reply-type actions.
+    
+    Args:
+        what: The topic/interest to personalize the message around
+        first_name: Customer's first name for personalization
+        channel: Communication channel (Email, WhatsApp, Phone)
+        
+    Returns:
+        Dictionary with subject, body, and whatsapp_text fields
+    """
+    import os
+    
+    # Get signoffs from environment
+    SIGNOFF_NAME  = os.getenv("SIGNOFF_NAME", "Sabrina")
+    EMAIL_SIGNOFF = os.getenv("SIGNOFF_EMAIL", f"Kind regards,\n{SIGNOFF_NAME}\nThe Baby Cot Shop")
+    WA_SIGNOFF    = os.getenv("SIGNOFF_WA", SIGNOFF_NAME)
+    
+    # Determine message type based on topic
+    wl = (what or "").lower()
+    is_design = ("design" in wl) or ("interior" in wl)
+    
+    # Generate channel-specific content
+    if is_design:
+        email_body = (
+            f"Hi {first_name}, I noticed you're interested in {what}. "
+            f"Would you like me to send a quick moodboard or a shortlist of pieces "
+            f"to help you choose? If you'd prefer, we can also jump on a short "
+            f"10–15 min call—completely up to you."
+            f"\n\n{EMAIL_SIGNOFF}"
+        )
+        wa_text = (
+            f"Hi {first_name}! Re your interest in {what}, want me to send a quick moodboard/"
+            f"inspo to get you started? Or we can do a short 10–15 min call if you'd rather "
+            f"talk it through. Which do you prefer?"
+            f"\n— {WA_SIGNOFF}"
+        )
+    elif what and what.lower() not in {"your enquiry", "enquiry", "question"}:
+        email_body = (
+            f"Hi {first_name}, thanks for your enquiry about {what}. "
+            f"Are you looking for options, pricing, or inspiration? "
+            f"Happy to share a few quick ideas."
+            f"\n\n{EMAIL_SIGNOFF}"
+        )
+        wa_text = (
+            f"Hi {first_name}! Thanks for asking about {what}, would you like me to send a few "
+            f"options or ideas to guide you?"
+            f"\n— {WA_SIGNOFF}"
+        )
+    else:
+        email_body = (
+            f"Hi {first_name}, thanks for visiting The Baby Cot Shop. "
+            f"Would you like me to share some inspiration ideas or clients' favourites "
+            f"to help you get started? Just let me know what would be most useful."
+            f"\n\n{EMAIL_SIGNOFF}"
+        )
+        wa_text = (
+            f"Hi {first_name}! Thanks for visiting The Baby Cot Shop, want me to share some of our "
+            f"clients' favourite pieces to get you started?"
+            f"\n— {WA_SIGNOFF}"
+        )
+    
+    # Return channel-appropriate message structure
+    if channel in {"WhatsApp", "Phone"}:
+        return {
+            "subject": None,
+            "body": None,
+            "whatsapp_text": wa_text,
+        }
+    else:  # Email and other channels
+        return {
+            "subject": "Quick follow-up",
+            "body": email_body,
+            "whatsapp_text": None,
+        }
+
 def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], metadata_data: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Generate mock action plan (personalized via subject/history), preserving existing copy 1:1."""
+    """
+    Generate deterministic action plan for messaging/reply generation.
+    
+    This function handles ALL reply-type actions with deterministic logic:
+    - In-person leads (Harrods, Chelsea, etc.)
+    - Follow-up messages
+    - Channel selection
+    - Message content generation
+    
+    It NEVER triggers OpenAI completions for messaging - only for analysis/scoring
+    when called from plan_next_action() with MOCK_LLM=False.
+    
+    The logic is modular to easily separate outreach vs conversation stages later.
+    """
     import os, re
     from uuid import uuid4
 
-   
-
+    # ============================================================================
+    # DETERMINISTIC MESSAGING LOGIC - NO OPENAI CALLS FOR REPLY GENERATION
+    # ============================================================================
+    # This section handles all messaging/reply generation with deterministic logic.
+    # OpenAI is only used for analysis/scoring when MOCK_LLM=False in plan_next_action().
+    #
+    # OUTREACH vs CONVERSATION STAGE LOGIC:
+    # - Current implementation handles outreach stage (initial follow-ups)
+    # - For conversation stage (ongoing dialogue), add logic here to detect
+    #   conversation context and use different message templates
+    # - This modular design makes it easy to extend later
+    
     # ---------- Normalize minimal fields ----------
     preferred = (state_data.get("preferred_channel") or "").strip().lower()
     email = (lead_data.get("email") or "").strip()
@@ -298,7 +430,8 @@ def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], met
     name = (lead_data.get("name") or "there").strip()
     first = (name.split()[0] if name else "there") or "there"
 
-    # ---------- Channel choice ----------
+    # ---------- DETERMINISTIC CHANNEL SELECTION ----------
+    # This logic determines the communication channel without any AI calls
     raw_channel = (state_data.get("channel") or "").strip().lower()
     preferred = (state_data.get("preferred_channel") or "").strip().lower()
 
@@ -342,7 +475,8 @@ def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], met
 
     log_debug(f"Selected channel = '{channel}'")
 
-    # ---------- Priority ----------
+    # ---------- DETERMINISTIC PRIORITY CALCULATION ----------
+    # Priority is calculated based on channel and outcomes, no AI involvement
     priority = 7 if channel in ("WhatsApp", "Phone") else 5
     if (state_data.get("last_outcome") or "").strip().lower() == "no_reply":
         priority = min(10, priority + 1)
@@ -373,7 +507,9 @@ def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], met
 
     notes_raw = (lead_data.get("notes") or "").strip()
 
-    # ---------- IN-PERSON LEADS LOGIC ----------
+    # ---------- DETERMINISTIC IN-PERSON LEADS HANDLING ----------
+    # All in-person leads (Harrods, Chelsea, etc.) use deterministic followup logic
+    # This ensures consistent messaging regardless of MOCK_LLM setting
     source = lead_data.get("source", "").strip().lower()
     
     # Check if this is an in-person lead
@@ -431,7 +567,8 @@ def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], met
         
         return plan
 
-    # ---------- HARRODS GUARDRAIL ----------
+    # ---------- DETERMINISTIC GUARDRAIL LOGIC ----------
+    # Business rules applied without AI - ensures consistent behavior
     if source == "harrods":
         has_interests = bool(interests)
         has_notes = bool(notes_raw)
@@ -461,7 +598,8 @@ def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], met
                 }
             }
 
-    # ---------- Find "what" to personalise ----------
+    # ---------- DETERMINISTIC MESSAGE PERSONALIZATION ----------
+    # Extract topic/keywords for personalization without AI calls
     def is_specific_topic(w: str) -> bool:
         if not w:
             return False
@@ -512,72 +650,13 @@ def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], met
     if not what:
         what = (lead_data.get("interest") or "your enquiry")
 
-    # ---------- Configurable sign-offs ----------
-    SIGNOFF_NAME  = os.getenv("SIGNOFF_NAME", "Sabrina")
-    EMAIL_SIGNOFF = os.getenv("SIGNOFF_EMAIL", f"Kind regards,\n{SIGNOFF_NAME}\nThe Baby Cot Shop")
-    WA_SIGNOFF    = os.getenv("SIGNOFF_WA", SIGNOFF_NAME)
-
-    subject_out = "Quick follow-up"
-
-    # ---------- Decide message type (design vs product vs generic) ----------
-    wl = (what or "").lower()
-    is_design = ("design" in wl) or ("interior" in wl)
-
-    if is_design:
-        email_body = (
-            f"Hi {first}, I noticed you're interested in {what}. "
-            f"Would you like me to send a quick moodboard or a shortlist of pieces "
-            f"to help you choose? If you'd prefer, we can also jump on a short "
-            f"10–15 min call—completely up to you."
-            f"\n\n{EMAIL_SIGNOFF}"
-        )
-        wa_text = (
-            f"Hi {first}! Re your interest in {what}, want me to send a quick moodboard/"
-            f"inspo to get you started? Or we can do a short 10–15 min call if you'd rather "
-            f"talk it through. Which do you prefer?"
-            f"\n— {WA_SIGNOFF}"
-        )
-    elif is_specific_topic(what):
-        email_body = (
-            f"Hi {first}, thanks for your enquiry about {what}. "
-            f"Are you looking for options, pricing, or inspiration? "
-            f"Happy to share a few quick ideas."
-            f"\n\n{EMAIL_SIGNOFF}"
-        )
-        wa_text = (
-            f"Hi {first}! Thanks for asking about {what}, would you like me to send a few "
-            f"options or ideas to guide you?"
-            f"\n— {WA_SIGNOFF}"
-        )
-    else:
-        email_body = (
-            f"Hi {first}, thanks for visiting The Baby Cot Shop. "
-            f"Would you like me to share some inspiration ideas or clients' favourites "
-            f"to help you get started? Just let me know what would be most useful."
-            f"\n\n{EMAIL_SIGNOFF}"
-        )
-        wa_text = (
-            f"Hi {first}! Thanks for visiting The Baby Cot Shop, want me to share some of our "
-            f"clients' favourite pieces to get you started?"
-            f"\n— {WA_SIGNOFF}"
-        )
-
-    ai_notes = f"Mock plan: {channel} with priority {priority}; personalized on '{what or 'n/a'}'."
-
-    # ---------- Assemble plan ----------
-    # Channel-specific message field logic: phone/whatsapp/number should only use whatsapp_text
-    if channel in {"WhatsApp", "Phone"}:
-        message = {
-            "subject": None,
-            "body": None,
-            "whatsapp_text": wa_text,
-        }
-    else:  # Email and other channels
-        message = {
-            "subject": subject_out,
-            "body": email_body,
-            "whatsapp_text": None,
-        }
+    # ---------- DETERMINISTIC MESSAGE GENERATION ----------
+    # Use helper function to generate all message content deterministically
+    message = _generate_deterministic_message(what, first, channel)
+    
+    # ---------- DETERMINISTIC PLAN ASSEMBLY ----------
+    # All messaging fields are set deterministically - no AI-generated content
+    ai_notes = f"Deterministic messaging: {channel} with priority {priority}; personalized on '{what or 'n/a'}'."
     
     plan = {
         "plan_id": str(uuid4()),
