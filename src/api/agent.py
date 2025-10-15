@@ -39,7 +39,6 @@ class LeadDecision(BaseModel):
     priority: int
     to_agent: bool
     notes: Optional[str] = None
-    message: Optional[str] = None   # optional drafted copy
     intent: Optional[str] = None    # e.g., interior_design/general
     score: Optional[int] = None
     source: Optional[str] = None
@@ -112,7 +111,6 @@ async def process_lead(lead: LeadIn):
         priority=int(decision.get("priority", 5)),
         to_agent=bool(decision.get("to_agent", True)),
         notes=decision.get("notes") or "",
-        message=decision.get("message"),
         intent=decision.get("intent"),
         score=decision.get("score"),
         source=lead.source,
