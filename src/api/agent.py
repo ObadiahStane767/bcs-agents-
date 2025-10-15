@@ -355,20 +355,24 @@ class LeadOutput(BaseModel):
 @router.post("/process_lead", response_model=LeadOutput)
 async def process_lead(payload: LeadPayload):
     """
-    Process lead and return core lead information with generated thread_key.
+    Process lead and return core lead information with thread_key.
+    Uses existing thread_key from metadata if provided, otherwise generates one.
     """
-    # Generate thread_key from email and source
+    # Check if thread_key is already provided in metadata
     thread_key = None
-    if payload.email and payload.source:
-        thread_key = f"{payload.email}-{payload.source}"
-    elif payload.email:
-        thread_key = f"{payload.email}-Unknown"
-    elif payload.source:
-        thread_key = f"Unknown-{payload.source}"
-    
-    # Debug log to confirm the generated thread_key
-    logger.info(f"Generated thread_key: {thread_key}")
-    logger.info(f"Input email: {payload.email}, source: {payload.source}")
+    if payload.metadata and payload.metadata.get("thread_key"):
+        thread_key = payload.metadata.get("thread_key")
+        logger.info(f"Using existing thread_key from metadata: {thread_key}")
+    else:
+        # Generate thread_key from email and source if not provided
+        if payload.email and payload.source:
+            thread_key = f"{payload.email}-{payload.source}"
+        elif payload.email:
+            thread_key = f"{payload.email}-Unknown"
+        elif payload.source:
+            thread_key = f"Unknown-{payload.source}"
+        logger.info(f"Generated thread_key: {thread_key}")
+        logger.info(f"Input email: {payload.email}, source: {payload.source}")
 
     # Return core lead information with metadata
     return LeadOutput(
@@ -387,4 +391,5 @@ async def process_lead(payload: LeadPayload):
             "thread_key": thread_key
         }
     )
+
 
