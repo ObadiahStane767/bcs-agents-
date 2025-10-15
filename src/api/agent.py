@@ -29,6 +29,7 @@ class LeadIn(BaseModel):
     city: Optional[str] = None
     country: Optional[str] = None
     thread_key: Optional[str] = None         # Thread identifier for conversation tracking
+    preferred_channel: Optional[str] = None   # Preferred communication channel
 
     class Config:
         extra = "ignore"  # ignore any unexpected fields from upstream
@@ -104,10 +105,35 @@ async def process_lead(lead: LeadIn):
     # Call LLM/business logic
     decision = await analyze_lead(lead.model_dump())
 
+    # Determine channel based on the specified logic
+    # Note: We ignore decision["channel"] and use our own logic
+    channel = None
+    
+    # 1. If lead.preferred_channel is "WhatsApp" and lead.phone exists, set channel to "WhatsApp"
+    if lead.preferred_channel == "WhatsApp" and lead.phone:
+        channel = "WhatsApp"
+    # 2. If lead.preferred_channel is "Email" and lead.email exists, set channel to "Email"
+    elif lead.preferred_channel == "Email" and lead.email:
+        channel = "Email"
+    # 3. If lead.phone exists and no preferred channel, default to "WhatsApp"
+    elif lead.phone and not lead.preferred_channel:
+        channel = "WhatsApp"
+    # 4. If lead.email exists and no preferred channel or phone, default to "Email"
+    elif lead.email and not lead.preferred_channel and not lead.phone:
+        channel = "Email"
+    # 5. Fallback: if preferred channel doesn't match available contact, use available contact
+    elif lead.preferred_channel == "WhatsApp" and not lead.phone and lead.email:
+        channel = "Email"
+    elif lead.preferred_channel == "Email" and not lead.email and lead.phone:
+        channel = "WhatsApp"
+    # 6. If neither phone nor email are present, set channel to "Unknown"
+    else:
+        channel = "Unknown"
+
     # Fill required fields with sensible defaults
     return LeadDecision(
         zoho_id=lead.zoho_id,
-        channel=decision.get("channel") or (lead.source or "Email"),
+        channel=channel,
         priority=int(decision.get("priority", 5)),
         to_agent=bool(decision.get("to_agent", True)),
         notes=decision.get("notes") or "",
