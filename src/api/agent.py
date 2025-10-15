@@ -115,10 +115,8 @@ async def process_lead(lead: LeadIn):
         message=decision.get("message"),
         intent=decision.get("intent"),
         score=decision.get("score"),
-        source=lead.source
+        source=lead.source,
         thread_key=lead.thread_key
-        
-        
     )
 
 # ---- New Sales Rep Agent endpoints ----
@@ -391,7 +389,8 @@ async def process_lead(payload: LeadPayload):
         notes=payload.notes,
         city=payload.city,
         country=payload.country,
-        thread_key=thread_key
+        metadata={
+            "thread_key": thread_key
         }
     )
 
