@@ -834,3 +834,4 @@ def _fallback_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any],
         "log": "API call failed - using fallback plan",
         "store": store
     }
+    
