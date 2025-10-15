@@ -56,6 +56,7 @@ class LeadContact(BaseModel):
     country: Optional[str] = None
     interests: Optional[List[str]] = None
     source: Optional[str] = None
+    thread_key: Optional[str] = None 
     
     @field_validator('interests', mode='before')
     @classmethod
@@ -177,6 +178,8 @@ async def next_action(payload: LeadRequest):
         logger.info(f"[/next_action] Extracted thread_key: {thread_key}, Outgoing thread_key: {plan_metadata.get('thread_key')}")
         logger.info(f"[/next_action] Source: {lead_dict.get('source')}, Country: {lead_dict.get('country')}")
         logger.info(f"[/next_action] Metadata: {metadata_dict}")
+        # Allow fallback if metadata is missing
+        thread_key = (metadata_dict or {}).get("thread_key") or lead_dict.get("thread_key") or ""
 
         return ActionPlan(**plan)
     except HTTPException:
