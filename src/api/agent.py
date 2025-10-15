@@ -116,6 +116,7 @@ async def process_lead(lead: LeadIn):
         intent=decision.get("intent"),
         score=decision.get("score"),
         source=lead.source
+        thread_key=lead.thread_key
         
         
     )
@@ -386,8 +387,7 @@ async def process_lead(payload: LeadPayload):
         notes=payload.notes,
         city=payload.city,
         country=payload.country,
-        metadata={
-            "thread_key": thread_key
+        thread_key=thread_key
         }
     )
 
