@@ -358,6 +358,7 @@ class LeadPayload(BaseModel):
     phone: Optional[str] = None
     source: Optional[str] = None
     interest: Optional[str] = None
+    interests: Optional[List[str]] = None 
     due_date: Optional[str] = None
     notes: Optional[str] = None
     city: Optional[str] = None
@@ -372,6 +373,7 @@ class LeadOutput(BaseModel):
     phone: Optional[str] = None
     source: Optional[str] = None
     interest: Optional[str] = None
+    interests: Optional[List[str]] = None 
     due_date: Optional[str] = None
     notes: Optional[str] = None
     city: Optional[str] = None
