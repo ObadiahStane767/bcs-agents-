@@ -20,3 +20,11 @@ app.include_router(agent_router)
 @app.get("/")
 def root():
     return {"ok": True, "service": "lead-followup-agent"}
+if __name__ == "__main__":
+    import uvicorn
+
+    # Print all route paths before starting the app
+    for route in app.routes:
+        print(route.path)
+
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8001, reload=True)
