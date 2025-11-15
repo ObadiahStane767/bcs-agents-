@@ -23,7 +23,7 @@ class LeadIn(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     source: Optional[str] = Field(None, description="Email | WhatsApp | Instagram | etc.")
-    interest: Optional[str] = None
+    interests: Optional[List[str]] = Field(default_factory=list)
     due_date: Optional[str] = Field(None, description="YYYY-MM-DD")
     notes: Optional[str] = None
     city: Optional[str] = None
