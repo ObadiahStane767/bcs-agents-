@@ -409,6 +409,7 @@ async def process_lead(payload: LeadPayload):
         phone=payload.phone,
         source=payload.source,
         interest=payload.interest,
+        interests=payload.interests,
         due_date=payload.due_date,
         notes=payload.notes,
         city=payload.city,
