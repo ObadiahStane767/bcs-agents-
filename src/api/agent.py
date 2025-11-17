@@ -8,7 +8,8 @@ import logging
 from uuid import uuid4
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict  
+
 
 from src.services.llm_service import analyze_lead, plan_next_action
 
@@ -31,6 +32,12 @@ class LeadIn(BaseModel):
     country: Optional[str] = None
     thread_key: Optional[str] = None         # Thread identifier for conversation tracking
     preferred_channel: Optional[str] = None   # Preferred communication channel
+
+    @validator("email")
+    def validate_email(cls, v):
+        if v and "@" not in v:
+            raise ValueError("Invalid email format")
+        return v
 
     class Config:
         extra = "ignore"  # ignore any unexpected fields from upstream
@@ -59,8 +66,7 @@ class LeadContact(BaseModel):
     source: Optional[str] = None
     thread_key: Optional[str] = None 
     
-    @field_validator('interests', mode='before')
-    @classmethod
+    @validator("interests", pre=True)
     def validate_interests(cls, v):
         if v is None:
             return []
