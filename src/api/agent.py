@@ -1,58 +1,53 @@
-"""
-Sales Rep Agent API for Lead Follow-up AI Agent
-Handles lead analysis and next action planning for sales representatives.
-"""
-
-import json
-import logging
-from uuid import uuid4
-from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict  
-
-
-from src.services.llm_service import analyze_lead, plan_next_action
-
-logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/v1", tags=["lead"])
-
 # ---- Legacy models for backwards compatibility ----
 class LeadIn(BaseModel):
-   
     zoho_id: str = Field(..., description="Zoho record ID")
     name: Optional[str] = None
     first_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
-    source: Optional[str] = Field(None, description="Email | WhatsApp | Instagram | etc.")
+    source: Optional[str] = None
     interests: Optional[List[str]] = Field(default_factory=list)
-    due_date: Optional[str] = Field(None, description="YYYY-MM-DD")
+    due_date: Optional[str] = None
     notes: Optional[str] = None
     city: Optional[str] = None
     country: Optional[str] = None
-    thread_key: Optional[str] = None         # Thread identifier for conversation tracking
-    preferred_channel: Optional[str] = None   # Preferred communication channel
+    thread_key: Optional[str] = None
+    preferred_channel: Optional[str] = None
 
-    @field_validator("email")
+    @field_validator("email", mode="before")
     @classmethod
-    def validate_email(cls, v):
-        if v and "@" not in v:
-            raise ValueError("Invalid email format")
+    def safe_email(cls, v):
+        # None → keep
+        if v is None:
+            return None
+        
+        # list ["email"] → take first or ignore
+        if isinstance(v, list):
+            if len(v) == 0:
+                return None
+            v = v[0]
+
+        # dict → ignore
+        if isinstance(v, dict):
+            return None
+
+        # non-string → ignore
+        if not isinstance(v, str):
+            return None
+        
+        v = v.strip()
+        if v == "":
+            return None
+
+        # only validate FORMAT if string is non-empty
+        if "@" not in v:
+            return None
+
         return v
 
     class Config:
-        extra = "ignore"  # ignore any unexpected fields from upstream
+        extra = "ignore"
 
-class LeadDecision(BaseModel):
-    zoho_id: str
-    channel: str
-    priority: int
-    to_agent: bool
-    notes: Optional[str] = None
-    intent: Optional[str] = None    # e.g., interior_design/general
-    score: Optional[int] = None
-    source: Optional[str] = None
-    thread_key: Optional[str] = None         # Thread identifier for conversation tracking
 
 # ---- New Sales Rep Agent models ----
 class LeadContact(BaseModel):
@@ -65,21 +60,46 @@ class LeadContact(BaseModel):
     country: Optional[str] = None
     interests: Optional[List[str]] = None
     source: Optional[str] = None
-    thread_key: Optional[str] = None 
-    
-    @field_validator("interests", mode="before")
+    thread_key: Optional[str] = None
+
+    @field_validator("email", mode="before")
     @classmethod
     def normalize_email(cls, v):
-    # Accept null, empty, or whitespace → treat as no email
-      if v is None:
-          return None
-      v = v.strip()
-      if v == "":
-          return None
-    # If present but invalid, still don’t break – just ignore
-      if "@" not in v:
-          return None
-      return v
+        # None → OK
+        if v is None:
+            return None
+
+        # list → extract first valid
+        if isinstance(v, list):
+            v = v[0] if v else None
+
+        # dict → ignore
+        if isinstance(v, dict):
+            return None
+
+        # non-string → ignore
+        if not isinstance(v, str):
+            return None
+
+        v = v.strip()
+        if v == "":
+            return None
+
+        if "@" not in v:
+            return None
+
+        return v
+
+    @field_validator("interests", mode="before")
+    @classmethod
+    def normalize_interests(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v] if v.strip() else []
+        if isinstance(v, list):
+            return v
+        return []
 
 class LeadState(BaseModel):
     intent: Optional[str] = "general"        # e.g., interior_design/general
