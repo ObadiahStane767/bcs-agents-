@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/v1", tags=["lead"])
 
 # ---- Legacy models for backwards compatibility ----
 class LeadIn(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # replaces class Config
+   
     zoho_id: str = Field(..., description="Zoho record ID")
     name: Optional[str] = None
     first_name: Optional[str] = None
