@@ -59,7 +59,7 @@ class LeadContact(BaseModel):
     zoho_id: str
     name: Optional[str] = None
     first_name: Optional[str] = None
-    email: Optional[EmailStr] = None
+    email: Optional[Str] = None
     phone: Optional[str] = None
     city: Optional[str] = None
     country: Optional[str] = None
@@ -69,14 +69,17 @@ class LeadContact(BaseModel):
     
     @field_validator("interests", mode="before")
     @classmethod
-    def validate_interests(cls, v):
-        if v is None:
-            return []
-        if isinstance(v, str):
-            return [v] if v.strip() else []
-        if isinstance(v, list):
-            return v
-        return []
+    def normalize_email(cls, v):
+    # Accept null, empty, or whitespace → treat as no email
+    if v is None:
+        return None
+    v = v.strip()
+    if v == "":
+        return None
+    # If present but invalid, still don’t break – just ignore
+    if "@" not in v:
+        return None
+    return v
 
 class LeadState(BaseModel):
     intent: Optional[str] = "general"        # e.g., interior_design/general
@@ -363,7 +366,7 @@ class LeadPayload(BaseModel):
     zoho_id: str
     name: Optional[str] = None
     first_name: Optional[str] = None
-    email: Optional[EmailStr] = None
+    email: Optional[Str] = None
     phone: Optional[str] = None
     source: Optional[str] = None
     interest: Optional[str] = None
