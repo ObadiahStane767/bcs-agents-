@@ -71,15 +71,15 @@ class LeadContact(BaseModel):
     @classmethod
     def normalize_email(cls, v):
     # Accept null, empty, or whitespace → treat as no email
-    if v is None:
+      if v is None:
         return None
     v = v.strip()
-    if v == "":
+      if v == "":
         return None
     # If present but invalid, still don’t break – just ignore
-    if "@" not in v:
+      if "@" not in v:
         return None
-    return v
+      return v
 
 class LeadState(BaseModel):
     intent: Optional[str] = "general"        # e.g., interior_design/general
