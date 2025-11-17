@@ -101,23 +101,15 @@ class LeadContact(BaseModel):
         # None → OK
         if v is None:
             return None
-
-        # list → extract first valid
         if isinstance(v, list):
             v = v[0] if v else None
-
-        # dict → ignore
         if isinstance(v, dict):
             return None
-
-        # non-string → ignore
         if not isinstance(v, str):
             return None
-
-        v = v.strip()
+       v = v.strip()
         if v == "":
             return None
-
         if "@" not in v:
             return None
 
