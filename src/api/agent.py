@@ -72,13 +72,13 @@ class LeadContact(BaseModel):
     def normalize_email(cls, v):
     # Accept null, empty, or whitespace → treat as no email
       if v is None:
-        return None
-    v = v.strip()
+          return None
+      v = v.strip()
       if v == "":
-        return None
+          return None
     # If present but invalid, still don’t break – just ignore
       if "@" not in v:
-        return None
+          return None
       return v
 
 class LeadState(BaseModel):
