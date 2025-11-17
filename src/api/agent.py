@@ -59,7 +59,7 @@ class LeadContact(BaseModel):
     zoho_id: str
     name: Optional[str] = None
     first_name: Optional[str] = None
-    email: Optional[Str] = None
+    email: Optional[str] = None
     phone: Optional[str] = None
     city: Optional[str] = None
     country: Optional[str] = None
@@ -366,7 +366,7 @@ class LeadPayload(BaseModel):
     zoho_id: str
     name: Optional[str] = None
     first_name: Optional[str] = None
-    email: Optional[Str] = None
+    email: Optional[str] = None
     phone: Optional[str] = None
     source: Optional[str] = None
     interest: Optional[str] = None
