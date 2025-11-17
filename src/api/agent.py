@@ -33,7 +33,8 @@ class LeadIn(BaseModel):
     thread_key: Optional[str] = None         # Thread identifier for conversation tracking
     preferred_channel: Optional[str] = None   # Preferred communication channel
 
-    @validator("email")
+    @field_validator("email")
+    @classmethod
     def validate_email(cls, v):
         if v and "@" not in v:
             raise ValueError("Invalid email format")
@@ -66,7 +67,8 @@ class LeadContact(BaseModel):
     source: Optional[str] = None
     thread_key: Optional[str] = None 
     
-    @validator("interests", pre=True)
+    @field_validator("interests", mode="before")
+    @classmethod
     def validate_interests(cls, v):
         if v is None:
             return []
