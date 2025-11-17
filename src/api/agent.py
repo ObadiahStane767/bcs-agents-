@@ -31,14 +31,7 @@ class LeadIn(BaseModel):
     country: Optional[str] = None
     thread_key: Optional[str] = None         # Thread identifier for conversation tracking
     preferred_channel: Optional[str] = None   # Preferred communication channel
-    
-    @field_validator("email")
-    @classmethod
-    def validate_email(cls, v):
-        if v and "@" not in v:
-            raise ValueError("Invalid email format")
-        return v
-   
+
     class Config:
         extra = "ignore"  # ignore any unexpected fields from upstream
 
