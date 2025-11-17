@@ -17,10 +17,11 @@ router = APIRouter(prefix="/api/v1", tags=["lead"])
 
 # ---- Legacy models for backwards compatibility ----
 class LeadIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")  # replaces class Config
     zoho_id: str = Field(..., description="Zoho record ID")
     name: Optional[str] = None
     first_name: Optional[str] = None
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     phone: Optional[str] = None
     source: Optional[str] = Field(None, description="Email | WhatsApp | Instagram | etc.")
     interests: Optional[List[str]] = Field(default_factory=list)
@@ -30,7 +31,14 @@ class LeadIn(BaseModel):
     country: Optional[str] = None
     thread_key: Optional[str] = None         # Thread identifier for conversation tracking
     preferred_channel: Optional[str] = None   # Preferred communication channel
-
+    
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v):
+        if v and "@" not in v:
+            raise ValueError("Invalid email format")
+        return v
+   
     class Config:
         extra = "ignore"  # ignore any unexpected fields from upstream
 
