@@ -98,5 +98,23 @@ def test_in_person_always_followup():
             if not message_correct:
                 print(f"      Message type mismatch: got standard message, expected in-person followup")
 
+def test_in_store_copy_differs():
+    """Ensure In-Store payloads use bespoke copy instead of Harrods text."""
+    lead_data_in_store = {
+        "name": "Maria Lopez",
+        "first_name": "Maria",
+        "email": "maria@example.com",
+        "phone": "+1234567890",
+        "source": "In-Store"
+    }
+    instore_plan = _mock_action_plan(lead_data_in_store, {"intent": "general"}, {})
+    message = instore_plan.get("message") or {}
+    subject = message.get("subject") or ""
+    body = (message.get("body") or "").lower()
+    assert "Lovely meeting you in store" in subject, "Subject should reflect in-store phrasing"
+    assert "lovely meeting you in store" in body, "Body should use in-store friendly copy"
+
+
 if __name__ == "__main__":
     test_in_person_always_followup()
+    test_in_store_copy_differs()

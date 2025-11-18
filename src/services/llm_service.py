@@ -269,6 +269,11 @@ def get_in_person_followup(lead_data: Dict[str, Any], state_data: Dict[str, Any]
     first = (name.split()[0] if name else "there") or "there"
     raw_channel = (state_data.get("channel") or "").strip().lower()
     preferred = (state_data.get("preferred_channel") or "").strip().lower()
+    source_raw = (lead_data.get("source") or "").strip()
+    source = source_raw.lower()
+    is_in_store = source in {"in-store", "instore", "in store", "store visit"}
+    is_harrods = source == "harrods"
+    location_display = source_raw or "The Baby Cot Shop"
     
     # Get signoffs
     SIGNOFF_NAME = os.getenv("SIGNOFF_NAME", "Sabrina")
@@ -293,22 +298,60 @@ def get_in_person_followup(lead_data: Dict[str, Any], state_data: Dict[str, Any]
     else:
         channel = "Email"  # Default for in-person
     
+    # Choose copy direction based on source so Harrods and generic in-store visits feel different
+    if is_in_store:
+        wa_phone_message = (
+            f"Hi {first}, lovely meeting you in store! It was great connecting and I'm here if you're still considering "
+            f"anything for your little one's room.\n\nFeel free to message anytime\n{WA_SIGNOFF}"
+        )
+        email_subject = f"Lovely meeting you in store, {first}"
+        email_body = (
+            f"Hi {first},\n\nIt was so lovely meeting you in store. Thank you for stopping by — "
+            f"if there's anything you're still considering for your little one's room, I'm here to help with ideas, "
+            f"pricing, or quick recommendations.\n\nWhether you'd like inspiration or want to go over specifics, "
+            f"just reply here and I'll take care of it.\n\nWarmest regards,\n\n{EMAIL_SIGNOFF}"
+        )
+    elif is_harrods:
+        wa_phone_message = (
+            f"Hi {first}, it was lovely seeing you at Harrods! I just wanted to follow up, happy to help if you're still "
+            f"considering anything for your little one's room\n\nFeel free to message anytime\n{WA_SIGNOFF}"
+        )
+        email_subject = f"Lovely seeing you at Harrods, {first}"
+        email_body = (
+            f"Hi {first}, It was such a pleasure connecting with you at Harrods.\n\n"
+            f"I just wanted to follow up to say thank you for visiting us, and if there's anything you're still "
+            f"considering for your little one's room, I'd be happy to help.\n\nWhether you're ready to explore options "
+            f"or just have a few questions, feel free to reply here.\n\nWarmest regards,\n\n{EMAIL_SIGNOFF}"
+        )
+    else:
+        wa_phone_message = (
+            f"Hi {first}, it was lovely seeing you at {location_display}! I just wanted to follow up in case you're still "
+            f"considering anything for your little one's room.\n\nFeel free to message anytime\n{WA_SIGNOFF}"
+        )
+        email_subject = f"Lovely seeing you at {location_display}, {first}"
+        email_body = (
+            f"Hi {first},\n\nIt was such a pleasure connecting with you at {location_display}. "
+            f"If there's anything you're still considering for your little one's room, I'd be happy to help with ideas "
+            f"or next steps.\n\nWhether you're ready to explore options or just have a few questions, feel free to reply "
+            f"here.\n\nWarmest regards,\n\n{EMAIL_SIGNOFF}"
+        )
+
     # Generate message based on determined channel
     if channel == "WhatsApp":
         return {
             "channel": "WhatsApp",
-            "message": f"Hi {first}, it was lovely seeing you at Harrods! I just wanted to follow up, happy to help if you're still considering anything for your little one's room\n\nFeel free to message anytime\n{WA_SIGNOFF}"
+            "message": wa_phone_message
         }
     elif channel == "Phone":
         return {
             "channel": "Phone",
-            "message": f"Hi {first}, it was lovely seeing you at Harrods! I just wanted to follow up, happy to help if you're still considering anything for your little one's room\n\nFeel free to message anytime\n{WA_SIGNOFF}"
+            "message": wa_phone_message
         }
     else:  # Email
         return {
             "channel": "Email",
-            "subject": f"Lovely seeing you at Harrods, {first}",
-            "message": f"Hi {first}, It was such a pleasure connecting with you at Harrods.\n\nI just wanted to follow up to say thank you for visiting us, and if there's anything you're still considering for your little one's room, I'd be happy to help.\n\nWhether you're ready to explore options or just have a few questions, feel free to reply here.\n\nWarmest regards,\n\n{EMAIL_SIGNOFF}"
+            "subject": email_subject,
+            "message": email_body
         }
 def log_debug(msg):
     print("[DEBUG]", msg)
@@ -514,7 +557,7 @@ def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], met
     source = lead_data.get("source", "").strip().lower()
     
     # Check if this is an in-person lead
-    in_person_sources = {"harrods", "chelsea", "store visit", "in-store"}
+    in_person_sources = {"harrods", "chelsea", "store visit", "in-store", "in store", "instore"}
     is_in_person = source in in_person_sources
     
     # Always use in-person followup for in-person sources, but respect channel choice
