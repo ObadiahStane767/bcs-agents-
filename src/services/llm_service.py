@@ -306,8 +306,8 @@ def get_in_person_followup(lead_data: Dict[str, Any], state_data: Dict[str, Any]
         )
         email_subject = f"Lovely meeting you in store, {first}"
         email_body = (
-            f"Hi {first},\n\nIt was so lovely meeting you in store. Thank you for stopping by — "
-            f"if there's anything you're still considering for your little one's room, I'm here to help with ideas, "
+            f"Hi {first},\n\nIt was so lovely meeting you in store. Thank you for stopping by. "
+            f"If there's anything you're still considering for your little one's room, I'm here to help with ideas, "
             f"pricing, or quick recommendations.\n\nWhether you'd like inspiration or want to go over specifics, "
             f"just reply here and I'll take care of it.\n\nWarmest regards,\n\n{EMAIL_SIGNOFF}"
         )

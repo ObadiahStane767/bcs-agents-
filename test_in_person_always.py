@@ -113,6 +113,9 @@ def test_in_store_copy_differs():
     body = (message.get("body") or "").lower()
     assert "Lovely meeting you in store" in subject, "Subject should reflect in-store phrasing"
     assert "lovely meeting you in store" in body, "Body should use in-store friendly copy"
+    dash_chars = {"-", "–", "—"}
+    assert not any(ch in subject for ch in dash_chars), "Subject should avoid hyphen/dash characters"
+    assert not any(ch in (message.get("body") or "") for ch in dash_chars), "Body should avoid hyphen/dash characters"
 
 
 if __name__ == "__main__":
