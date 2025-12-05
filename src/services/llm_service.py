@@ -431,7 +431,7 @@ def _generate_deterministic_message(what: str, first_name: str, channel: str) ->
         }
     else:  # Email and other channels
         return {
-            "subject": "Quick follow-up",
+            "subject": "Exploring ideas for your little one?",
             "body": email_body,
             "whatsapp_text": None,
         }
@@ -574,7 +574,7 @@ def _mock_action_plan(lead_data: Dict[str, Any], state_data: Dict[str, Any], met
             }
         else:  # Email
             message = {
-                "subject": followup.get("subject", "Quick follow-up"),
+                "subject": followup.get("subject", "Exploring ideas for your little one?"),
                 "body": followup["message"],
                 "whatsapp_text": None,
             }
